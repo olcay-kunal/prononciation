@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Élan Prononciation | Coach Socratique de Français</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+    <div class="glow-bg">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="logo-icon">🇫🇷</span>
+                <div class="logo-text">
+                    <h1>Élan Prononciation</h1>
+                    <p>Coaching Socratique en Temps Réel</p>
+                </div>
+            </div>
+            <div class="header-status">
+                <div id="connection-badge" class="badge badge-disconnected">
+                    <span class="badge-dot"></span>
+                    <span id="badge-text">Déconnecté</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="app-grid">
+            <!-- LEFT PANEL: CONFIGURATION & PEDAGOGY -->
+            <aside class="sidebar-panel">
+                <!-- SESSION CONFIG -->
+                <div class="glass-card card-config">
+                    <h2 class="card-title">Configuration de la Session</h2>
+                    
+                    <div class="form-group">
+                        <label for="api-key">Clé API Google AI Studio</label>
+                        <div class="input-password-wrapper">
+                            <input type="password" id="api-key" placeholder="AIzaSy..." autocomplete="off">
+                            <button type="button" id="toggle-api-key" class="btn-icon" title="Afficher/Masquer la clé">👁️</button>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group col">
+                            <label for="level-select">Niveau Actuel</label>
+                            <select id="level-select">
+                                <option value="A1">Débutant (A1)</option>
+                                <option value="A2">Élémentaire (A2)</option>
+                                <option value="B1" selected>Intermédiaire (B1)</option>
+                                <option value="B2">Intermédiaire Supérieur (B2)</option>
+                                <option value="C1">Avancé (C1)</option>
+                                <option value="C2">Maîtrise (C2)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group col">
+                            <label for="voice-select">Voix du Professeur</label>
+                            <select id="voice-select">
+                                <option value="Aoede" selected>Aoede (Féminin clair)</option>
+                                <option value="Charon">Charon (Masculin posé)</option>
+                                <option value="Kore">Kore (Féminin doux)</option>
+                                <option value="Puck">Puck (Masculin enjoué)</option>
+                                <option value="Fenrir">Fenrir (Masculin grave)</option>
+                            </select>
+                        </div>
+                    </div>
+
+
+                </div>
+
+                <!-- PEDAGOGICAL TIPS SHEET -->
+                <div class="glass-card card-pedagogy">
+                    <h2 class="card-title" id="pedagogy-title">Conseils de Prononciation</h2>
+                    <div id="pedagogy-loading" class="pedagogy-loading hidden">
+                        <div class="spinner spinner-sm"></div>
+                        <span>Chargement des priorités par Gemini...</span>
+                    </div>
+                    <div id="pedagogy-content" class="pedagogy-content">
+                        <!-- Custom content will be loaded here dynamically -->
+                    </div>
+                </div>
+
+
+            </aside>
+
+            <!-- MAIN COLUMN: SESSION CONTROL & LIVE TRANSCRIPT -->
+            <main class="main-panel">
+                <!-- AUDIO & TALK HUB -->
+                <div class="glass-card talk-hub">
+                    <div class="visualizer-container">
+                        <!-- USER SIDE -->
+                        <div class="visualizer-box user-vis">
+                            <span class="vis-label">Vous (Microphone)</span>
+                            <canvas id="user-canvas"></canvas>
+                            <div class="mic-indicator" id="user-mic-indicator"></div>
+                        </div>
+
+                        <!-- TEACHER SIDE -->
+                        <div class="visualizer-box teacher-vis">
+                            <span class="vis-label">Professeur (Gemini)</span>
+                            <canvas id="teacher-canvas"></canvas>
+                            <div class="speech-indicator" id="teacher-speech-indicator"></div>
+                        </div>
+                    </div>
+
+                    <!-- CONTROL BUTTONS -->
+                    <div class="control-row">
+                        <button id="btn-talk" class="btn btn-primary btn-talk">
+                            <span class="btn-icon">🎙️</span>
+                            <span id="btn-talk-text">Démarrer le cours</span>
+                        </button>
+                        
+                        <div class="action-buttons">
+                            <button id="btn-mute" class="btn btn-secondary" disabled title="Couper le micro">
+                                <span class="btn-icon">🔇</span>
+                            </button>
+                            <button id="btn-clear" class="btn btn-secondary" title="Effacer l'historique">
+                                <span class="btn-icon">🗑️</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="status-indicator-text" id="status-text">
+                        Cliquez sur "Démarrer le cours" pour vous connecter et commencer la Phase 1 (Diagnostic).
+                    </div>
+                </div>
+
+                <!-- TRANSCRIPT LOG -->
+                <div class="glass-card transcript-panel">
+                    <div class="transcript-header">
+                        <h2 class="card-title">Transcription en Direct</h2>
+                        <span class="scroll-lock-badge" id="scroll-badge">Défilement auto</span>
+                    </div>
+                    
+                    <div class="chat-log" id="chat-log">
+                        <!-- Welcoming instructions card inside chat log -->
+                        <div class="chat-message welcome-msg">
+                            <div class="avatar">👨‍🏫</div>
+                            <div class="message-content">
+                                <h3>Bienvenue dans votre atelier de prononciation !</h3>
+                                <p>Pour démarrer la session :</p>
+                                <ol>
+                                    <li>Vérifiez ou complétez votre <strong>Clé API Google AI Studio</strong> à gauche.</li>
+                                    <li>Sélectionnez votre <strong>Niveau</strong> de français actuel.</li>
+                                    <li>Cliquez sur le bouton <strong>"Démarrer le cours"</strong>.</li>
+                                    <li>Autorisez le microphone, mettez un casque si possible, et parlez naturellement ! Le professeur commencera par vous saluer et lancer le diagnostic (Phase 1).</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- AUDIO ELEMENT FOR WORKLET FALLBACK & CONTEXT INITIALIZATION -->
+    <div class="hidden">
+        <audio id="local-audio-test" muted></audio>
+    </div>
+
+    <!-- EVALUATION REPORT MODAL -->
+    <div id="evaluation-modal" class="modal-overlay hidden">
+        <div class="glass-card modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Rapport d'Évaluation de Prononciation</h2>
+                <button id="btn-close-modal" class="btn-close" title="Fermer">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <!-- Loading State -->
+                <div id="evaluation-loading" class="evaluation-loading">
+                    <div class="spinner"></div>
+                    <p>Analyse de la conversation par l'IA...</p>
+                </div>
+                
+                <!-- Report Content State -->
+                <div id="evaluation-report-container" class="evaluation-report-container hidden">
+                    <div class="report-tabs">
+                        <button id="tab-report" class="tab-btn active">Évaluation Pédagogique</button>
+                        <button id="tab-transcript" class="tab-btn">Transcription du Cours</button>
+                    </div>
+                    
+                    <div class="tab-content" id="report-tab-content">
+                        <!-- AI Evaluation Report Content (Rendered Markdown) -->
+                        <div id="evaluation-report-text" class="markdown-body"></div>
+                    </div>
+                    
+                    <div class="tab-content hidden" id="transcript-tab-content">
+                        <!-- Full Session Transcript -->
+                        <div id="evaluation-transcript-text" class="transcript-body"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button id="btn-download-report" class="btn btn-primary" disabled>
+                    <span class="btn-icon">📥</span> Télécharger le Rapport (.md)
+                </button>
+                <button id="btn-close-modal-footer" class="btn btn-secondary">Fermer</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="./app.js"></script>
+</body>
+</html>
