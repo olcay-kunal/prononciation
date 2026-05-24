@@ -1,5 +1,4 @@
 
-// Configuration and UI Elements
 const CONFIG = {
     DEFAULT_API_KEY: '',
     WS_URL: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent'
@@ -10,7 +9,6 @@ const dom = {
     toggleApiKey: document.getElementById('toggle-api-key'),
     levelSelect: document.getElementById('level-select'),
     voiceSelect: document.getElementById('voice-select'),
-    // modelSelect and customModelInput removed
     connectionBadge: document.getElementById('connection-badge'),
     badgeText: document.getElementById('badge-text'),
     btnTalk: document.getElementById('btn-talk'),
@@ -26,7 +24,14 @@ const dom = {
     scrollBadge: document.getElementById('scroll-badge')
 };
 
-// Application State
+/**
+ * Retourne la clé API Google AI Studio nettoyée saisie par l'utilisateur.
+ * @returns {string} La clé API.
+ */
+function getApiKey() {
+    return dom.apiKey.value.trim();
+}
+
 let state = {
     connected: false,
     muted: false,
@@ -200,7 +205,7 @@ function resizeCanvases() {
 // ----------------------------------------------------
 
 async function connectSession() {
-    const key = dom.apiKey.value.trim();
+    const key = getApiKey();
     if (!key) {
         alert("Veuillez saisir votre clé API Google AI Studio.");
         dom.apiKey.focus();
@@ -212,7 +217,6 @@ async function connectSession() {
     dom.btnTalk.disabled = true;
 
     try {
-        // 1. Initialize audio contexts (needs user gesture)
         await initAudioContexts();
         
         // 2. Request user microphone
@@ -968,12 +972,11 @@ async function triggerEvaluationReport() {
     
     openEvaluationModal();
     
-    // Set UI to loading state
     document.getElementById('evaluation-loading').classList.remove('hidden');
     document.getElementById('evaluation-report-container').classList.add('hidden');
     document.getElementById('btn-download-report').disabled = true;
     
-    const apiKey = dom.apiKey.value.trim();
+    const apiKey = getApiKey();
     if (!apiKey) {
         showEvaluationError("Clé API manquante pour générer le rapport. Veuillez la renseigner pour analyser votre performance.");
         return;
@@ -1204,7 +1207,7 @@ async function loadPedagogicalGuide(level) {
     
     titleEl.textContent = `Conseils Prononciation (${level})`;
     
-    const apiKey = dom.apiKey.value.trim();
+    const apiKey = getApiKey();
     if (!apiKey) {
         contentEl.innerHTML = `<p style="font-size: 0.78rem; font-style: italic; color: var(--text-secondary); margin-top: 10px;">
             Veuillez saisir votre clé API Google AI Studio ci-dessus pour générer les recommandations de prononciation personnalisées pour le niveau ${level}.
