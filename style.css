@@ -1028,5 +1028,14 @@ select:focus {
     margin-bottom: 8px;
 }
 
+.app-footer {
+    text-align: center;
+    padding: 15px 0 5px 0;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    opacity: 0.6;
+    letter-spacing: 0.5px;
+}
+
 
 
