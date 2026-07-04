@@ -346,7 +346,7 @@ Ton objectif n'est pas de supprimer l'accent turc (qui est une richesse), mais d
 
 RÈGLE D'OR DE TRANSCRIPTION ET D'ANALYSE (TRÈS IMPORTANT) :
 1. ÉCOUTE DE L'AUDIO RÉEL : Tu dois écouter le flux audio de l'apprenant avec une rigueur absolue. Si l'apprenant fait une erreur de grammaire (ex: conjugaison erronée comme "Je va danser" au lieu de "Je vais danser") ou une erreur de prononciation, tu dois la relever exactement comme elle a été produite.
-2. PAS DE CORRECTION AUTOMATIQUE : Ne lisse pas les propos de l'apprenant. S'il dit "Je va danser", tu dois entendre et acter qu'il a dit "Je va danser". Ne te comporte pas comme si le modèle de transcription avait corrigé sa phrase en "Je vais danser". Transcris et cite ses erreurs telles qu'elles ont été prononcées dans tes retours textuels et d'évaluation.
+2. PAS DE CORRECTION AUTOMATIQUE (INTERDICTION ABSOLUE D'INTERPRÉTER OU DE CORRIGER) : Ne lisse sous aucun prétexte les propos de l'apprenant. S'il dit "Je va danser", tu dois entendre, acter et transcrire textuellement "Je va danser". Il est strictement interdit d'ajuster ou de corriger la transcription pour la rendre conforme à la grammaire ou à la phonétique correcte. Tu dois confronter l'apprenant avec sa production brute réelle, avec toutes ses fautes de conjugaison, d'accord ou de prononciation.
 3. PRIORISATION DES ERREURS EFFECTIVES : Ta priorité absolue (#1) est de réagir aux erreurs réelles que l'apprenant vient de commettre dans sa phrase actuelle. S'il fait une erreur immédiate, concentre-toi dessus pour la corriger et propose des exercices de répétition. Ne te focalise sur les erreurs théoriques typiques des turcophones (ex: les voyelles nasales dans "danser" au niveau ${level}) que s'il n'a pas commis d'erreur flagrante dans son dernier énoncé (priorité #2).
 
 LE NIVEAU ACTUEL DÉCLARÉ DE L'APPRENANT EST : ${level}. Adapte ton débit de parole (parle plus lentement pour A1-B1, naturellement pour B2-C2) et ton vocabulaire à ce niveau.
@@ -1010,6 +1010,8 @@ ${dialogueStr}
 
 Analyse les performances de l'apprenant (marqué comme "Apprenant") durant cette session. Rédige un rapport d'évaluation pédagogique détaillé, structuré, chaleureux et encourageant en français, au format Markdown.
 
+CONSIGNE CRITIQUE DE TRANSCRIPTION : Dans ton rapport, ne corrige JAMAIS les erreurs de l'apprenant lors des citations. Transcris ses fautes de grammaire ou de prononciation telles qu'elles ont été prononcées (ex: écrire "Je va danser" si c'est ce qu'il a dit) sans lissage ni interprétation, afin qu'il puisse travailler sur ses erreurs réelles.
+
 Le rapport doit contenir obligatoirement les sections suivantes :
 1. **Résumé de la session** : Un court résumé de l'échange et de la participation de l'apprenant.
 2. **Diagnostic des erreurs de prononciation** : Identifie les erreurs commises par l'apprenant, en faisant le lien avec les pièges typiques des turcophones si applicable (ex: dévoisement des consonnes finales, ajout de voyelles nasales, confusion /u/ et /y/, voyelles de soutien). Cite les phrases/mots prononcés.
@@ -1023,9 +1025,9 @@ Rédige uniquement le rapport en Markdown.`;
 
 async function generateContentWithFallback(apiKey, promptText) {
     const models = [
-        "models/gemini-2.5-flash",
-        "models/gemini-2.0-flash",
-        "models/gemini-1.5-flash"
+        "models/gemini-flash-latest",
+        "models/gemini-flash-latest",
+        "models/gemma-4-31b-it"
     ];
     
     let lastError = null;
