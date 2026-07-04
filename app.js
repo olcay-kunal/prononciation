@@ -405,9 +405,7 @@ Commence immédiatement en saluant l'apprenant de manière chaleureuse en franç
                     }
                 ]
             },
-            inputAudioTranscription: {
-                languageCode: "fr-FR"
-            },
+            inputAudioTranscription: {},
             outputAudioTranscription: {}
         }
     };
