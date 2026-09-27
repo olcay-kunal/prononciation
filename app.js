@@ -1146,9 +1146,9 @@ Rédige uniquement le rapport en Markdown.`;
 
 async function generateContentWithFallback(apiKey, promptText) {
     const models = [
-        "models/gemini-3.8-flash",
-        "models/gemini-3.8-pro",
-        "models/gemini-flash-latest"
+        "models/gemini-flash-latest",
+        "models/gemini-flash-lite-latest",
+        "models/gemma-4-31b-it"
     ];
     
     let lastError = null;
