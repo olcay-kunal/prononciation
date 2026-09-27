@@ -1,7 +1,11 @@
 
 const CONFIG = {
     DEFAULT_API_KEY: '',
-    WS_URL: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent'
+    WS_URL: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent',
+    PRIMARY_LIVE_MODEL: 'models/gemini-3.8-live',
+    FALLBACK_LIVE_MODELS: [
+        'models/gemini-3.1-flash-live-preview'
+    ]
 };
 
 const dom = {
@@ -37,6 +41,9 @@ let state = {
     muted: false,
     autoScroll: true,
     ws: null,
+    currentLiveModel: 'models/gemini-3.8-live',
+    currentLiveModelIndex: 0,
+    userInitiatedDisconnect: false,
     
     // Audio Contexts
     captureContext: null,
@@ -204,7 +211,12 @@ function resizeCanvases() {
 // WEBSOCKET & AUDIO ENGINE
 // ----------------------------------------------------
 
-async function connectSession() {
+/**
+ * Établit la session audio et WebSocket avec Gemini Live.
+ * Implémente un basculement automatique vers les modèles de secours en cas d'indisponibilité.
+ * @param {number} [modelIndex=0] - L'index du modèle dans la liste de résilience.
+ */
+async function connectSession(modelIndex = 0) {
     const key = getApiKey();
     if (!key) {
         alert("Veuillez saisir votre clé API Google AI Studio.");
@@ -212,64 +224,94 @@ async function connectSession() {
         return;
     }
 
+    const availableModels = [CONFIG.PRIMARY_LIVE_MODEL, ...CONFIG.FALLBACK_LIVE_MODELS];
+    const targetModel = availableModels[modelIndex] || CONFIG.PRIMARY_LIVE_MODEL;
+    state.currentLiveModel = targetModel;
+    state.currentLiveModelIndex = modelIndex;
+    state.userInitiatedDisconnect = false;
+
     updateConnectionBadge('connecting', 'Connexion...');
-    dom.statusText.textContent = "1/3 : Activation des flux audio...";
     dom.btnTalk.disabled = true;
 
     try {
+        dom.statusText.textContent = "1/3 : Activation des flux audio...";
         await initAudioContexts();
         
-        // 2. Request user microphone
-        dom.statusText.textContent = "2/3 : Autorisation du microphone...";
-        state.micStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                channelCount: 1
-            }
-        });
+        if (!state.micStream || !state.micStream.active) {
+            dom.statusText.textContent = "2/3 : Autorisation du microphone...";
+            state.micStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    channelCount: 1
+                }
+            });
+        }
 
-        // 3. Connect WebSocket
-        dom.statusText.textContent = "3/3 : Connexion au serveur Gemini...";
-        const model = "models/gemini-3.1-flash-live-preview";
+        const modelLabel = targetModel.replace('models/', '');
+        dom.statusText.textContent = `3/3 : Connexion au modèle ${modelLabel}...`;
         const wsUrl = `${CONFIG.WS_URL}?key=${key}`;
         
-        console.log("Connexion WebSocket à :", wsUrl);
+        if (state.ws) {
+            try {
+                state.ws.close();
+            } catch (_) {}
+            state.ws = null;
+        }
+
         state.ws = new WebSocket(wsUrl);
         
         state.ws.onopen = () => {
-            console.log("WebSocket connecté.");
-            dom.statusText.textContent = "Connexion établie. Initialisation du cours...";
-            sendSetupMessage(model);
+            dom.statusText.textContent = `Initialisation du cours (${modelLabel})...`;
+            sendSetupMessage(targetModel);
         };
         
         state.ws.onclose = (event) => {
-            console.log("WebSocket fermé. Code:", event.code, "Raison:", event.reason || "Non spécifiée", "Propre:", event.wasClean);
+            if (state.userInitiatedDisconnect) {
+                dom.statusText.textContent = `Session terminée (Code: ${event.code}).`;
+                cleanupSession();
+                return;
+            }
+
+            if (!state.connected && modelIndex + 1 < availableModels.length) {
+                const nextModel = availableModels[modelIndex + 1];
+                const nextLabel = nextModel.replace('models/', '');
+                const warningMsg = `⚠️ Le modèle ${modelLabel} n'a pas pu être initialisé (Code: ${event.code}). Basculement automatique vers ${nextLabel}...`;
+                appendSystemMessage(warningMsg);
+                dom.statusText.textContent = `Basculement vers ${nextLabel}...`;
+                
+                setTimeout(() => {
+                    connectSession(modelIndex + 1);
+                }, 600);
+                return;
+            }
+
             dom.statusText.textContent = `Connexion fermée (Code: ${event.code}).`;
             if (event.code === 1006 || event.code === 1007 || event.code === 1008 || event.code === 1011) {
-                appendSystemMessage(`Échec de la connexion (Code: ${event.code}). Raison: ${event.reason || 'non spécifiée'}. Cela peut provenir d'une clé API invalide, d'un modèle non supporté (assurez-vous d'utiliser gemini-3.1-flash-live-preview ou gemini-2.0-flash-exp), ou de restrictions réseau régionales.`);
+                appendSystemMessage(`Échec de la connexion (Code: ${event.code}). Raison: ${event.reason || 'non spécifiée'}. Cela peut provenir d'une clé API invalide, de restrictions réseau régionales, ou de l'inaccessibilité du modèle ${modelLabel}.`);
             }
             cleanupSession();
         };
         
-        state.ws.onerror = (err) => {
-            console.error("Erreur WebSocket:", err);
+        state.ws.onerror = () => {
             dom.statusText.textContent = "Erreur réseau de connexion.";
-            cleanupSession();
         };
         
         state.ws.onmessage = handleWebSocketMessage;
 
     } catch (err) {
-        console.error("Erreur d'initialisation de la session:", err);
         alert("Impossible d'accéder au microphone ou d'initier la connexion. Détails : " + err.message);
         dom.statusText.textContent = "Échec de l'accès au microphone ou de la connexion.";
         cleanupSession();
     }
 }
 
+/**
+ * Interrompt manuellement la session active initiée par l'utilisateur.
+ */
 function disconnectSession() {
+    state.userInitiatedDisconnect = true;
     cleanupSession();
 }
 
@@ -334,33 +376,93 @@ async function initAudioContexts() {
     }
 }
 
-// Send the initial config message
+/**
+ * Construit les directives d'adaptation pédagogique selon le niveau CECRL (A1 à C2).
+ * Calibre strictement le débit vocal, la complexité syntaxique et le registre lexical.
+ * @param {string} level - Le niveau CECRL sélectionné.
+ * @returns {string} Directives d'adaptation pédagogique et vocale.
+ */
+function getLevelPedagogicalProfile(level) {
+    switch (level) {
+        case 'A1':
+            return `CADRE D'ADAPTATION STRICT POUR LE NIVEAU A1 (DÉBUTANT) :
+- DÉBIT VOCAL (IMPÉRATIF) : Parle de façon EXTRÊMEMENT LENTE et découpée. Articule exagérément chaque phonème. Insère de longues pauses perceptibles (1 seconde) entre chaque mot ou groupe de mots. Emploie une ponctuation aérée (virgules, points de suspension) pour forcer le synthétiseur vocal à ralentir.
+- COMPLEXITÉ SYNTAXIQUE : Phrases ultra-courtes de 3 à 6 mots maximum. Utilise exclusivement la structure : Sujet + Verbe + Complément. Un seul verbe conjugué par énoncé. Zéro proposition subordonnée, aucun pronom relatif complexe.
+- TEMPS DES VERBES : Présent de l'indicatif ou impératif immédiat.
+- VOCABULAIRE & STRUCTURES : Uniquement des termes concrets du quotidien le plus immédiat. Aucune expression idiomatique ni métaphore.
+- MODÈLE D'ÉLOCUTION : "Bonjour. ... Je suis ton professeur. ... Comment tu t'appelles ? ... Répète après moi : Bonjour."`;
+
+        case 'A2':
+            return `CADRE D'ADAPTATION STRICT POUR LE NIVEAU A2 (ÉLÉMENTAIRE) :
+- DÉBIT VOCAL (IMPÉRATIF) : Parle à un rythme NETTEMENT RALENTI et très posé. Articulation soignée et claire, pauses bien marquées entre les propositions.
+- COMPLEXITÉ SYNTAXIQUE : Phrases simples de 6 à 10 mots maximum. Deux propositions au maximum reliées par des connecteurs élémentaires ("et", "mais", "parce que"). Évite toute structure alambiquée.
+- TEMPS DES VERBES : Présent, Futur proche ("je vais..."), Passé composé avec auxiliaires réguliers.
+- VOCABULAIRE & STRUCTURES : Situations concrètes de la vie quotidienne (achats, météo, famille, loisirs). Expressions fixes simples.
+- MODÈLE D'ÉLOCUTION : "Bonjour ! Comment vas-tu aujourd'hui ? Tu habites dans quelle ville ? Dis-moi une phrase simple."`;
+
+        case 'B1':
+            return `CADRE D'ADAPTATION STRICT POUR LE NIVEAU B1 (INTERMÉDIAIRE) :
+- DÉBIT VOCAL : Débit MODÉRÉ et naturellement articulé. Vitesse de conversation accessible, sans précipitation, enchaînements et liaisons obligatoires bien prononcés.
+- COMPLEXITÉ SYNTAXIQUE : Phrases de longueur moyenne avec propositions subordonnées courantes (cause, conséquence, but : "pour que", "donc", "comme").
+- TEMPS DES VERBES : Alternance Passé composé / Imparfait pour raconter des événements, Futur simple, Conditionnel de politesse ("Je voudrais...", "Pourrais-tu...").
+- VOCABULAIRE & STRUCTURES : Lexique étendu de la vie sociale et professionnelle, expressions d'opinion ("À mon avis", "Je pense que"). Formulations usuelles autorisées.
+- MODÈLE D'ÉLOCUTION : "Bonjour ! Quel temps fait-il chez toi aujourd'hui ? Qu'as-tu prévu de faire pendant ton temps libre ?"`;
+
+        case 'B2':
+            return `CADRE D'ADAPTATION STRICT POUR LE NIVEAU B2 (INTERMÉDIAIRE SUPÉRIEUR) :
+- DÉBIT VOCAL : Débit NATUREL, dynamique et fluide. Vitesse standard d'une conversation entre locuteurs francophones natifs, liaisons et élisions courantes.
+- COMPLEXITÉ SYNTAXIQUE : Syntaxe élaborée et variée. Subordonnées relatives ("dont", "auquel"), structures de concession et d'opposition ("bien que", "pourtant", "tandis que").
+- TEMPS DES VERBES : Subjonctif présent, Conditionnel passé, voix passive et constructions hypothétiques ("Si tu avais...").
+- VOCABULAIRE & STRUCTURES : Vocabulaire riche, précis et nuancé (termes abstraits, concepts de société, débats). Registre standard soutenu.
+- MODÈLE D'ÉLOCUTION : "Bonjour ! J'aimerais que nous abordions un sujet d'actualité. Que penses-tu de l'évolution des habitudes de travail ces dernières années ?"`;
+
+        case 'C1':
+        case 'C2':
+            return `CADRE D'ADAPTATION STRICT POUR LE NIVEAU ${level} (AVANCÉ / MAÎTRISE) :
+- DÉBIT VOCAL : Débit RAPIDE, spontané et authentique. Fluidité native totale avec toutes les subtilités rythmiques, intonations expressives et accents d'insistance.
+- COMPLEXITÉ SYNTAXIQUE : Syntaxe hautement sophistiquée. Inversions stylistiques, participes présents, gérondifs, subjonctif passé, structures rhétoriques complexes.
+- VOCABULAIRE & STRUCTURES : Registre soutenu, idiomes fins, expressions métaphoriques élaborées, précision lexicale académique et nuances stylistiques.
+- MODÈLE D'ÉLOCUTION : "Bonjour ! C'est un réel plaisir de dialoguer avec vous. Dans quelle mesure estimez-vous que la musicalité d'une langue influe sur la force persuasive d'une argumentation ?"`;
+
+        default:
+            return `CADRE D'ADAPTATION STANDARD POUR LE NIVEAU ${level} :
+- DÉBIT VOCAL : Posé, articulé et adapté aux capacités de l'apprenant au niveau ${level}.
+- COMPLEXITÉ SYNTAXIQUE : Adaptée au niveau ${level}.`;
+    }
+}
+
+/**
+ * Transmet le message de configuration initial au serveur Gemini Live.
+ * @param {string} modelName - Le nom d'identifiant du modèle ciblé.
+ */
 function sendSetupMessage(modelName) {
     const level = dom.levelSelect.value;
     const voice = dom.voiceSelect.value;
+    const levelProfile = getLevelPedagogicalProfile(level);
     
-    // Compile dynamic instructions inserting the student's declared level
     const systemInstructionText = `RÔLE ET POSTURE PÉDAGOGIQUE :
 Tu es un expert d'élite en phonétique et phonologie du français, doublé d'un enseignant socratique bienveillant. Ta spécialité absolue est le coaching d'apprenants turcophones de français.
 Ton objectif n'est pas de supprimer l'accent turc (qui est une richesse), mais d'éliminer les erreurs sur les "phonèmes distinctifs" et les fautes grammaticales qui nuisent à la compréhension.
+
+${levelProfile}
 
 RÈGLE D'OR DE TRANSCRIPTION ET D'ANALYSE (TRÈS IMPORTANT) :
 1. ÉCOUTE DE L'AUDIO RÉEL : Tu dois écouter le flux audio de l'apprenant avec une rigueur absolue. Si l'apprenant fait une erreur de grammaire (ex: conjugaison erronée comme "Je va danser" au lieu de "Je vais danser") ou une erreur de prononciation, tu dois la relever exactement comme elle a été produite.
 2. PAS DE CORRECTION AUTOMATIQUE (INTERDICTION ABSOLUE D'INTERPRÉTER OU DE CORRIGER) : Ne lisse sous aucun prétexte les propos de l'apprenant. S'il dit "Je va danser", tu dois entendre, acter et transcrire textuellement "Je va danser". Il est strictement interdit d'ajuster ou de corriger la transcription pour la rendre conforme à la grammaire ou à la phonétique correcte. Tu dois confronter l'apprenant avec sa production brute réelle, avec toutes ses fautes de conjugaison, d'accord ou de prononciation.
 3. PRIORISATION DES ERREURS EFFECTIVES : Ta priorité absolue (#1) est de réagir aux erreurs réelles que l'apprenant vient de commettre dans sa phrase actuelle. S'il fait une erreur immédiate, concentre-toi dessus pour la corriger et propose des exercices de répétition. Ne te focalise sur les erreurs théoriques typiques des turcophones (ex: les voyelles nasales dans "danser" au niveau ${level}) que s'il n'a pas commis d'erreur flagrante dans son dernier énoncé (priorité #2).
-
-LE NIVEAU ACTUEL DÉCLARÉ DE L'APPRENANT EST : ${level}. Adapte ton débit de parole (parle plus lentement pour A1-B1, naturellement pour B2-C2) et ton vocabulaire à ce niveau.
+4. RESPECT STRICT DU DÉBIT ET DES STRUCTURES DU NIVEAU ${level} : Dans toutes tes répliques audio, applique sans dévier les consignes de débit vocal, de simplicité ou de complexité syntaxique du profil du niveau ${level}. Ne parle jamais trop vite ni avec des structures trop difficiles pour un apprenant débutant ou intermédiaire.
+5. RÈGLE STRICTE SUR L'ALPHABET ET LA TRANSCRIPTION (ANTI-HALLUCINATION) : L'apprenant s'exprime en français (ou pose occasionnellement une question en turc au niveau A1/A2). Toute transcription textuelle (STT) et toute réplique doivent être STRICTEMENT rédigées en ALPHABET LATIN (français / turc). Il est FORMELLEMENT INTERDIT de transcrire des bruits, des silences ou des hésitations en caractères coréens (Hangul), chinois, japonais ou cyrilliques. Tout mot prononcé doit être rattaché phonétiquement au français.
 
 MÉTHODOLOGIE SOCRATIQUE & ACTIONS CORRECTIVES :
 Ne donne jamais la solution immédiatement. Si l'apprenant fait une erreur :
-- Guide-le par des questions pour qu'il réalise ce qu'il a dit : "Tu as dit 'Je va danser'. Quelle est la conjugaison correcte du verbe aller avec 'je' ?"
+- Guide-le par des questions adaptées à son niveau ${level} pour qu'il réalise ce qu'il a dit : "Tu as dit 'Je va danser'. Quelle est la conjugaison correcte du verbe aller avec 'je' ?"
 - Propose-lui de répéter la phrase corrigée à plusieurs reprises pour ancrer le bon geste ou la bonne forme.
 - Fais-lui comparer deux mots si l'erreur est phonétique (paires minimales).
 
 DÉROULEMENT REQUIS (LA PROGRESSION) :
 
 PHASE 1 : LE DIAGNOSTIC (Phase Conversationnelle Initialisée par Toi)
-1. Engage une courte conversation naturelle (adaptée au niveau de l'apprenant).
+1. Engage une courte conversation naturelle calibrée strictement sur le débit et le vocabulaire du niveau ${level}.
 2. Écoute activement sans interrompre pour détecter ce que l'apprenant produit réellement. Note ses erreurs effectives (grammaticales et de prononciation) ainsi que les pièges typiques des turcophones s'ils se présentent :
    - Dévoisement des consonnes finales (ex: "robe" prononcé /rɔp/, "rose" prononcé /rɔs/).
    - Difficultés avec les voyelles nasales (/ɛ̃/, /ɑ̃/, /ɔ̃/) souvent suivies d'un son /n/ ou /m/ parasite.
@@ -370,7 +472,7 @@ PHASE 1 : LE DIAGNOSTIC (Phase Conversationnelle Initialisée par Toi)
 
 PHASE 2 : LA PROGRESSION ET LES EXERCICES CIBLÉS
 Une fois une erreur détectée (ou le diagnostic posé), annonce à l'apprenant sur quel défi (erreur réelle commise ou défi phonémique prioritaire) vous allez travailler.
-Propose des exercices progressifs :
+Propose des exercices progressifs adaptés au niveau ${level} :
 1. Prise de conscience et correction : "Faisons un zoom sur 'Je va'. Répète après moi : 'Je vais'..."
 2. Discrimination auditive / Production par paires minimales : Fais-lui répéter des oppositions cruciales (ex: "au-dessus" / "au-dessous", "vin" / "vent").
 3. Intégration en contexte : Fais-lui prononcer une courte phrase naturelle contenant la forme ou le phonème cible.
@@ -383,7 +485,7 @@ TON ET STYLE INTERACTIF :
 - Utilise des images physiques simples pour la phonétique : "arrondis les lèvres", "recule la langue", etc.
 
 INSTRUCTIONS DE DÉMARRAGE :
-Commence immédiatement en saluant l'apprenant de manière chaleureuse en français. Fais référence à son niveau ${level} et lance la Phase 1 (Diagnostic) en lui posant une question ouverte simple et conviviale pour le faire parler.`;
+Commence immédiatement en saluant l'apprenant de manière chaleureuse en français en respectant scrupuleusement le débit et le vocabulaire du niveau ${level}. Pose une première question simple et bienveillante pour engager la conversation.`;
 
     const setupPayload = {
         setup: {
@@ -410,7 +512,6 @@ Commence immédiatement en saluant l'apprenant de manière chaleureuse en franç
         }
     };
     
-    console.log("Envoi du setup payload (camelCase):", setupPayload);
     state.ws.send(JSON.stringify(setupPayload));
 }
 
@@ -433,10 +534,13 @@ async function handleWebSocketMessage(event) {
     // Log the packet to console for debug purposes
     console.debug("Message reçu de Gemini:", msg);
 
-    // 1. Setup complete confirmation
+    if (msg.error) {
+        appendSystemMessage(`Erreur API (${msg.error.code || 'Inconnue'}) : ${msg.error.message || JSON.stringify(msg.error)}`);
+    }
+
     if (msg.setupComplete) {
-        console.log("Setup complété ! Session active.");
         state.connected = true;
+        state.userInitiatedDisconnect = false;
         
         dom.btnTalk.disabled = false;
         dom.btnTalk.classList.add('active');
@@ -444,9 +548,9 @@ async function handleWebSocketMessage(event) {
         dom.btnMute.disabled = false;
         
         updateConnectionBadge('connected', 'Connecté');
-        dom.statusText.textContent = "Le professeur vous écoute. Parlez dans votre micro.";
+        const activeLabel = state.currentLiveModel.replace('models/', '');
+        dom.statusText.textContent = `Professeur connecté (${activeLabel}). Parlez dans votre micro.`;
         
-        // Start streaming mic audio
         startStreamingMicrophone();
         return;
     }
@@ -458,10 +562,6 @@ async function handleWebSocketMessage(event) {
         const done = inputTrans.done !== undefined ? inputTrans.done : true;
         if (text) {
             updateTranscriptBubble('user', text, done);
-            
-            // If the user starts a new phrase/turn, stop teacher playback
-            // (Client-side barge-in safeguard)
-            stopPlayback();
         }
     }
 
@@ -705,17 +805,37 @@ function updateConnectionBadge(connectionState, text) {
     }
 }
 
-// Real-time chat bubbles stream with turn-level paragraph aggregation
-function updateTranscriptBubble(speaker, text, isFinal) {
+/**
+ * Assainit le texte transcrit en filtrant les artefacts et hallucinations de caractères non-latins
+ * (notamment le coréen Hangul et les idéogrammes asiatiques survenant lors d'hésitations ou de bruits).
+ * @param {string} text - Le fragment textuel brut.
+ * @returns {string} Le texte filtré et nettoyé.
+ */
+function sanitizeTranscriptText(text) {
+    if (!text || typeof text !== 'string') return '';
+    return text
+        .replace(/[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\u0400-\u04FF]/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
+/**
+ * Met à jour dynamiquement la bulle de transcription avec filtrage d'artefacts.
+ * @param {string} speaker - L'émetteur ('user' ou 'teacher').
+ * @param {string} rawText - Le fragment textuel brut reçu.
+ * @param {boolean} isFinal - Indique si le segment est finalisé.
+ */
+function updateTranscriptBubble(speaker, rawText, isFinal) {
+    const text = sanitizeTranscriptText(rawText);
+    if (!text && !state.previousSegmentsText) return;
+    
     const formattedSpeaker = speaker === 'user' ? 'user' : 'teacher';
     
     if (state.currentSpeaker !== formattedSpeaker) {
-        // Finalize previous speaker's turn text
         if (state.currentSpeaker && state.currentSegmentText) {
             state.previousSegmentsText += state.currentSegmentText + " ";
         }
         
-        // Switch speaker and start new turn bubble
         state.currentSpeaker = formattedSpeaker;
         state.currentBubbleElement = createMessageBubble(formattedSpeaker);
         state.previousSegmentsText = "";
@@ -724,12 +844,13 @@ function updateTranscriptBubble(speaker, text, isFinal) {
     
     state.currentSegmentText = text;
     
-    // Update text node in bubble with combined content
     if (state.currentBubbleElement) {
         const textNode = state.currentBubbleElement.querySelector('.message-text');
         if (textNode) {
             const combinedText = (state.previousSegmentsText + text).trim();
-            textNode.textContent = combinedText;
+            if (combinedText) {
+                textNode.textContent = combinedText;
+            }
         }
     }
     
@@ -1025,52 +1146,66 @@ Rédige uniquement le rapport en Markdown.`;
 
 async function generateContentWithFallback(apiKey, promptText) {
     const models = [
-        "models/gemini-flash-latest",
-        "models/gemini-flash-latest",
-        "models/gemma-4-31b-it"
+        "models/gemini-3.8-flash",
+        "models/gemini-3.8-pro",
+        "models/gemini-flash-latest"
     ];
     
     let lastError = null;
     
     for (const model of models) {
-        console.log(`Tentative de génération avec le modèle : ${model}...`);
-        try {
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    contents: [
-                        {
-                            parts: [
-                                { text: promptText }
-                            ]
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                if (attempt > 1) {
+                    await new Promise(resolve => setTimeout(resolve, 1500));
+                }
+                
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        contents: [
+                            {
+                                parts: [
+                                    { text: promptText }
+                                ]
+                            }
+                        ]
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errText = await response.text();
+                    let errMsg = errText;
+                    try {
+                        const parsed = JSON.parse(errText);
+                        if (parsed.error && parsed.error.message) {
+                            errMsg = parsed.error.message;
                         }
-                    ]
-                })
-            });
-            
-            if (!response.ok) {
-                const errText = await response.text();
-                throw new Error(`Erreur API (${response.status}) : ${errText}`);
+                    } catch (_) {}
+                    
+                    if ((response.status === 500 || response.status === 503) && attempt < 2) {
+                        continue;
+                    }
+                    
+                    throw new Error(`Erreur API (${response.status}) [${model.replace('models/', '')}] : ${errMsg}`);
+                }
+                
+                const data = await response.json();
+                if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0]) {
+                    return data.candidates[0].content.parts[0].text;
+                } else {
+                    throw new Error("Format de réponse de l'API Gemini invalide ou vide.");
+                }
+            } catch (err) {
+                lastError = err;
             }
-            
-            const data = await response.json();
-            if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0]) {
-                console.log(`Génération réussie avec le modèle : ${model}`);
-                return data.candidates[0].content.parts[0].text;
-            } else {
-                throw new Error("Format de réponse de l'API Gemini invalide ou vide.");
-            }
-        } catch (err) {
-            console.warn(`Erreur lors de l'appel au modèle ${model} :`, err);
-            lastError = err;
-            // Continue to next model
         }
     }
     
-    throw lastError || new Error("Tous les modèles de secours ont échoué.");
+    throw lastError || new Error("Les serveurs de Google ont rencontré une indisponibilité passagère (Erreur 500). Veuillez réessayer dans quelques instants.");
 }
 
 function displayEvaluationReport(reportMarkdown, dialogue) {
@@ -1115,7 +1250,19 @@ function displayEvaluationReport(reportMarkdown, dialogue) {
 
 function showEvaluationError(message) {
     const reportTextDiv = document.getElementById('evaluation-report-text');
-    reportTextDiv.innerHTML = `<div class="error-banner">${message}</div>`;
+    reportTextDiv.innerHTML = `
+        <div class="error-banner">${message}</div>
+        <div style="text-align: center; margin-top: 16px;">
+            <button id="btn-retry-report" class="btn btn-primary" style="padding: 8px 18px; font-size: 0.85rem; cursor: pointer;">
+                🔄 Réessayer la génération du rapport
+            </button>
+        </div>
+    `;
+    
+    const retryBtn = document.getElementById('btn-retry-report');
+    if (retryBtn) {
+        retryBtn.addEventListener('click', triggerEvaluationReport);
+    }
     
     document.getElementById('evaluation-loading').classList.add('hidden');
     document.getElementById('evaluation-report-container').classList.remove('hidden');
@@ -1209,18 +1356,25 @@ function parseMarkdownToHTML(md) {
     return html;
 }
 
+/**
+ * Charge les conseils pédagogiques de prononciation personnalisés selon le niveau CECRL.
+ * Rédige en turc accessible et chaleureux pour A1/A2, et en français fluide et humain pour B1+.
+ * @param {string} level - Le niveau CECRL sélectionné.
+ */
 async function loadPedagogicalGuide(level) {
     const titleEl = document.getElementById('pedagogy-title');
     const loadingEl = document.getElementById('pedagogy-loading');
     const contentEl = document.getElementById('pedagogy-content');
+    const isTurkish = (level === 'A1' || level === 'A2');
     
-    titleEl.textContent = `Conseils Prononciation (${level})`;
+    titleEl.textContent = isTurkish ? `Telaffuz İpuçları (${level})` : `Conseils Prononciation (${level})`;
     
     const apiKey = getApiKey();
     if (!apiKey) {
-        contentEl.innerHTML = `<p style="font-size: 0.78rem; font-style: italic; color: var(--text-secondary); margin-top: 10px;">
-            Veuillez saisir votre clé API Google AI Studio ci-dessus pour générer les recommandations de prononciation personnalisées pour le niveau ${level}.
-        </p>`;
+        const placeholderMsg = isTurkish
+            ? `Bu seviye (${level}) için pratik ve anlaşılır telaffuz ipuçlarını oluşturmak için yukarıya Google AI Studio API anahtarınızı girin.`
+            : `Veuillez saisir votre clé API Google AI Studio ci-dessus pour générer les recommandations de prononciation personnalisées pour le niveau ${level}.`;
+        contentEl.innerHTML = `<p style="font-size: 0.78rem; font-style: italic; color: var(--text-secondary); margin-top: 10px;">${placeholderMsg}</p>`;
         return;
     }
     
@@ -1228,22 +1382,45 @@ async function loadPedagogicalGuide(level) {
     contentEl.classList.add('hidden');
     
     try {
-        const promptText = `Tu es un expert d'élite en phonétique du français pour les apprenants turcophones.
-Pour le niveau de français ${level} (du Cadre européen commun de référence pour les langues), donne une liste très concise (maximum 120 mots) des 3 priorités absolues de prononciation et de phonétique sur lesquelles un élève turcophone doit se concentrer à ce niveau.
-Présente ces priorités sous forme de liste à puces Markdown, avec des exemples clairs (mots en français et leur prononciation simplifiée). Sois direct, pratique et encourageant. Rédige uniquement les puces en français, sans introduction ni conclusion.`;
+        const promptText = isTurkish
+            ? `Sen Türk öğrencilere Fransızca telaffuzu sevdiren, çok samimi, pratik ve deneyimli bir Fransızca koçusun.
+${level} seviyesindeki bir Türk öğrencinin Fransızca konuşurken en çok takıldığı 3 kritik telaffuz noktasını açıkla.
+KESİN DİL VE ÜSLUP KURALLARI:
+- Metni TAMAMEN TÜRKÇE yaz.
+- Asla akademik veya ağır fonetik terimler (örneğin "öndamaksıl sürtünmeli", "kapalı ön yuvarlak ünlü") KULLANMA.
+- Tamamen günlük, sıcak, samimi ve anlaşılır bir "insan dili" kullan. Bir arkadaşına pratik tüyo verir gibi anlat.
+- Dudak, dil ve nefes hareketlerini herkesin anında anlayıp uygulayabileceği somut benzetmelerle açıkla (örneğin: "Dudaklarını ıslık çalar gibi iyice öne büzüp...", "sesi burnundan vererek...").
+- Her maddeye Türkçeden tanıdık bir ses benzetmesi ve 1-2 basit Fransızca örnek kelime ekle.
+- En fazla 120-130 kelime olsun. 3 maddelik Markdown listesi şeklinde, giriş veya sonuç cümlesi olmadan doğrudan maddeleri yaz.`
+            : `Tu es un coach bienveillant et passionné de prononciation française pour les apprenants turcophones.
+Pour le niveau ${level}, donne 3 conseils clés indispensables pour progresser en prononciation.
+RÈGLES STRICTES DE RÉDACTION :
+- Rédige entièrement en FRANÇAIS, dans un langage simple, vivant, humain et direct (évite tout jargon linguistique obscur ou trop académique).
+- Décris les gestes de prononciation de manière très concrète et imagée (position des lèvres, souffle, décontraction).
+- Donne 1 ou 2 exemples clairs et utiles par point.
+- Rédige uniquement 3 points concis en Markdown (maximum 120-130 mots), sans phrase d'introduction ni de conclusion.`;
 
         const mdText = await generateContentWithFallback(apiKey, promptText);
         contentEl.innerHTML = parseMarkdownToHTML(mdText);
     } catch (err) {
-        console.error("Erreur de chargement du guide pédagogique:", err);
-        contentEl.innerHTML = `<p style="font-size: 0.78rem; color: var(--danger); margin-top: 10px;">
-            Échec du chargement des conseils en temps réel.
-        </p>
-        <ul style="font-size: 0.78rem; margin-left: 16px; margin-top: 5px;">
-            <li>Travaillez la distinction des voyelles nasales (/ɛ̃/, /ɑ̃/, /ɔ̃/).</li>
-            <li>Pratiquez la distinction entre /u/ (ou) et /y/ (u).</li>
-            <li>Faites attention au dévoisement des consonnes sonores en fin de mot.</li>
-        </ul>`;
+        const fallbackHTML = isTurkish
+            ? `<p style="font-size: 0.78rem; color: var(--danger); margin-top: 10px;">
+                Özel ipuçları yüklenemedi. Temel öneriler:
+            </p>
+            <ul style="font-size: 0.78rem; margin-left: 16px; margin-top: 5px;">
+                <li><strong>'U' sesi:</strong> Dudaklarını ıslık çalar gibi iyice öne uzatıp 'i' demeye çalış (ör: <em>tu, rue</em>).</li>
+                <li><strong>Geniz sesleri (nasal):</strong> Sesi burnundan hafifçe bırak, sondaki 'n' harfini tam söyleme (ör: <em>bon, un</em>).</li>
+                <li><strong>Sessiz son harfler:</strong> Çoğu Fransızca kelimenin sonundaki sessiz harf okunmaz (ör: <em>petit</em> 'pöti' gibi okunur).</li>
+            </ul>`
+            : `<p style="font-size: 0.78rem; color: var(--danger); margin-top: 10px;">
+                Échec du chargement des conseils en temps réel.
+            </p>
+            <ul style="font-size: 0.78rem; margin-left: 16px; margin-top: 5px;">
+                <li>Distinguez nettement le son /u/ (comme dans <em>roue</em>) et le son /y/ (comme dans <em>rue</em>).</li>
+                <li>Soignez les voyelles nasales sans prononcer de consonne finale parasite.</li>
+                <li>Faites attention au dévoisement des consonnes sonores en fin de mot.</li>
+            </ul>`;
+        contentEl.innerHTML = fallbackHTML;
     } finally {
         loadingEl.classList.add('hidden');
         contentEl.classList.remove('hidden');
